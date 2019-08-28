@@ -181,7 +181,7 @@ def main():
         if isinstance(m, nn.BatchNorm2d):
             bnfactors += m.weight.data.cpu().abs().numpy().tolist()
     bnfactors = np.sort(np.array(bnfactors))
-    bnthres = bnfactors[int(len(bnfactors) * 0.7)]
+    bnthres = bnfactors[int(len(bnfactors) * 0.6)]
 
     prune_mask = {}
     named_modules = dict(model.named_modules())
@@ -199,6 +199,7 @@ def main():
     validate(val_loader, model, args.epochs)
 
     # resume initial weights
+    model = vgg_cifar.vgg16_bn(num_classes=100).cuda()
     init_weights = torch.load(join(args.tmp, "initial-weights.pth"))
     model.load_state_dict(init_weights['state_dict'])
 
@@ -232,6 +233,11 @@ def main():
 
     logger.info("evaluating after real pruning...")
     validate(val_loader, model, args.epochs)
+
+
+    for p in model.parameters():
+        if p.grad is not None:
+            p.grad = None
 
     if args.retrain:
         logger.info("Starting retraining with original random initiation:")
