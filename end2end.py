@@ -132,7 +132,7 @@ def get_sparsity(factors, thres=0.01):
     for v in factors.values():
         total0 += (v <= v.max()*thres).sum()
         total += v.numel()
-    return (total0 / total).item()
+    return (total0.float() / total).item()
 
 def main():
 
@@ -152,10 +152,6 @@ def main():
     logger.info(model)
     logger.info("Optimizer details:")
     logger.info(optimizer)
-
-    logger.info("Initial parameters details:")
-    for name, p in model.named_parameters():
-        logger.info("%s, shape=%s, std=%f, mean=%f" % (name, str(p.shape), p.std().item(), p.mean().item()))
 
     # records
     best_acc1 = 0
