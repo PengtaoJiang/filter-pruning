@@ -47,10 +47,12 @@ parser.add_argument('--weight-decay', '--wd', default=1e-4, type=float,
 parser.add_argument('--resume', default="", type=str, metavar='PATH',
                     help='path to latest checkpoint')
 parser.add_argument('--tmp', help='tmp folder', default="tmp/prune")
-parser.add_argument('--sparsity', type=float, default=1e-5, help='sparsity regularization')
-parser.add_argument('--target-sparsity', type=float, default=0.4, help='target sparsity')
 parser.add_argument('--randseed', type=int, help='random seed', default=None)
+#
+parser.add_argument('--sparsity', type=float, default=1e-5, help='sparsity regularization')
 parser.add_argument('--retrain', action="store_true")
+parser.add_argument('--prune-type', type=int, default=0, help="prune method")
+parser.add_argument('--percent', type=float, default=0.3, help='pruning percent')
 args = parser.parse_args()
 
 milestones = [100, 150, 180]
@@ -77,6 +79,11 @@ criterion = torch.nn.CrossEntropyLoss()
 tfboard_writer = writer = SummaryWriter(log_dir=args.tmp)
 logger = Logger(join(args.tmp, "log.txt"))
 
+# prune types
+# 0: prune with bn factor globally
+# 1: prune with (bn factor x next conv weight) globally
+# 2: prune with bn factor locally.
+#    Filters whose factors are less than the 0.01 times maximal factors within the same layer will be pruned
 def get_factors(model):
 
     factors = {}
@@ -105,21 +112,27 @@ def get_factors(model):
 
             factor = bnw * next_weight
 
-            _, idx0 = bnw.sort()
-            _, idx1 = factor.sort()
+            # _, idx0 = bnw.sort()
+            # _, idx1 = factor.sort()
 
-            factors[name] = factor.cpu().numpy().tolist()
+            if args.prune_type == 0:
+                factors[name] = bnw
+            elif args.prune_type == 1:
+                factors[name] = factor
+            elif args.prune_type == 2:
+                factors[name] = bnw
+            else:
+                raise ValueError("?")
 
     return factors
 
-def get_sparsity(factors, thres=0.001):
+def get_sparsity(factors, thres=0.01):
     total0 = 0
     total = 0
     for v in factors.values():
-        v = np.array(v)
         total0 += (v <= v.max()*thres).sum()
-        total += v.size
-    return total0 / total
+        total += v.numel()
+    return (total0 / total).item()
 
 def main():
 
@@ -172,10 +185,6 @@ def main():
                       milestones=milestones,
                       gamma=0.1)
 
-    random_input = torch.zeros(512, 3, 32, 32).cuda()
-    origin_output = model(random_input)
-
-    sparse_tolerance = 1
     last_sparsity = get_sparsity(get_factors(model))
     for epoch in range(args.start_epoch, args.epochs):
 
@@ -183,24 +192,37 @@ def main():
         loss = train(train_loader, model, optimizer, epoch)
         acc1, acc5 = validate(val_loader, model, epoch)
         scheduler.step()
+        # remember best prec@1 and save checkpoint
+        is_best = acc1 > best_acc1
+        if is_best:
+            best_acc1 = acc1
+        save_checkpoint({
+            'epoch': epoch + 1,
+            'state_dict': model.state_dict(),
+            'best_acc1': best_acc1,
+            'optimizer' : optimizer.state_dict()
+            }, is_best, path=args.tmp)
 
-        
-        if epoch % sparse_tolerance == 0:
+        logger.info("Best acc1=%.5f" % best_acc1)
+
+        # for prune-type == 2
+        if args.prune_type == 2:
+            target_sparsity = args.percent
             sparsity = get_sparsity(get_factors(model))
-            sparsity_gain = (sparsity - last_sparsity) / sparse_tolerance
-            expected_sparsity_gain = (args.target_sparsity - sparsity) / (args.epochs - epoch)
-            if sparsity < args.target_sparsity:
+            sparsity_gain = (sparsity - last_sparsity)
+            expected_sparsity_gain = (target_sparsity - sparsity) / (args.epochs - epoch)
+            if sparsity < target_sparsity:
                 # not sparse enough
                 if  sparsity_gain < expected_sparsity_gain:
                     logger.info("Sparsity gain %f (expected%f), increasing sparse penalty."%(sparsity_gain, expected_sparsity_gain))
                     args.sparsity += 1e-5
             else:
                 # over sparse
-                if sparsity > last_sparsity:
+                if sparsity > last_sparsity and args.sparsity > 0:
                     args.sparsity -= 1e-5
 
             logger.info("Sparse rate=%f (last=%f, target=%f), args.sparsity=%f" %\
-                (sparsity, last_sparsity, args.target_sparsity, args.sparsity))
+                (sparsity, last_sparsity, target_sparsity, args.sparsity))
             last_sparsity = sparsity
 
         lr = optimizer.param_groups[0]["lr"]
@@ -216,18 +238,110 @@ def main():
         tfboard_writer.add_scalar('test/acc1_epoch', acc1, epoch)
         tfboard_writer.add_scalar('test/acc5_epoch', acc5, epoch)
 
+    logger.info("Optimization done, ALL results saved to %s." % args.tmp)
+
+    # evaluate before pruning
+    logger.info("evaluating before pruning...")
+    validate(val_loader, model, args.epochs)
+
+    factors = get_factors(model)
+    sparsity = get_sparsity(factors)
+    factors_all = torch.cat(list(factors.values()))
+    factors_all, _ = torch.sort(factors_all)
+    thres = factors_all[int(factors_all.numel() * args.percent)]
+    logger.info("Model sparsity: %f"%sparsity)
+    logger.info("Pruning threshold: %f"%thres)
+
+    # mask pruning
+    prune_mask = {}
+    total_filters = 0
+    pruned_filters = 0
+    for idx, (name, m) in enumerate(model.named_modules()):
+        if not isinstance(m, nn.BatchNorm2d):
+            continue
+        factor = factors[name]
+        if args.prune_type == 0 or args.prune_type == 1:
+            prune_mask[name] = (factor >= thres)
+        elif args.prune_type == 2:
+            prune_mask[name] = factor >= factor.max() * 0.01
+
+        total_filters += factor.numel()
+        pruned_filters += (1-prune_mask[name]).sum()
+
+        m.weight.data[1-prune_mask[name]] = 0
+        m.bias.data[1-prune_mask[name]] = 0
+
+    prune_rate = float(pruned_filters)/total_filters
+    logger.info("Totally %d filters, %d has been pruned, pruning rate %f"%(total_filters, pruned_filters, prune_rate))
+
+    logger.info("evaluating after masking...")
+    validate(val_loader, model, args.epochs)
+
+
+    # do real pruning
+    modules = list(model.modules())
+    named_modules = dict(model.named_modules())
+    with torch.no_grad(): 
+        for idx, (name, m) in enumerate(named_modules.items()):
+            if not isinstance(m, nn.BatchNorm2d):
+                continue
+
+            previous_conv = modules[idx-1]
+            
+            nextid = idx+1
+            next_conv = modules[nextid]
+            while not (isinstance(next_conv, nn.Conv2d) or isinstance(next_conv, nn.Linear)):
+                next_conv = modules[nextid]
+                nextid += 1
+
+            assert isinstance(previous_conv, nn.Conv2d), type(previous_conv)
+            assert isinstance(next_conv, nn.Conv2d) or isinstance(next_conv, nn.Linear), type(next_conv)
+
+            mask = prune_mask[name]
+
+            m.weight.data = m.weight.data[mask]
+            m.bias.data = m.bias.data[mask]
+            m.running_mean = m.running_mean[mask]
+            m.running_var = m.running_var[mask]
+
+            previous_conv.weight.data = previous_conv.weight.data[mask]
+            previous_conv.bias.data = previous_conv.bias.data[mask]
+
+            next_conv.weight.data = next_conv.weight.data[:, mask]
+
+    logger.info("evaluating after real pruning...")
+    validate(val_loader, model, args.epochs)
+
+    # retrain
+    optimizer_retrain = torch.optim.SGD(
+        model.parameters(),
+        lr=args.lr,
+        momentum=args.momentum,
+        weight_decay=args.weight_decay
+    )
+    scheduler_retrain = lr_scheduler.MultiStepLR(optimizer_retrain,
+                      milestones=milestones,
+                      gamma=0.1)
+    best_acc1 = 0
+    for epoch in range(0, args.epochs):
+
+        # train and evaluate
+        loss = train(train_loader, model, optimizer_retrain, epoch)
+        acc1, acc5 = validate(val_loader, model, epoch)
+        scheduler_retrain.step()
+
+        lr = optimizer.param_groups[0]["lr"]
+
+        tfboard_writer.add_scalar('retrain/loss_epoch', loss, epoch)
+        tfboard_writer.add_scalar('retrain/lr_epoch', lr, epoch)
+        tfboard_writer.add_scalar('retrain/acc1_epoch', acc1, epoch)
+        tfboard_writer.add_scalar('retrain/acc5_epoch', acc5, epoch)
+
         # remember best prec@1 and save checkpoint
         is_best = acc1 > best_acc1
 
         if is_best:
             best_acc1 = acc1
-
-        # log parameters details
-        logger.info("Epoch %d parameters details:" % epoch)
-
-        for name, p in model.named_parameters():
-            logger.info("%s, shape=%s, std=%f, mean=%f" % \
-                    (name, str(p.shape), p.std().item(), p.mean().item()))
 
         logger.info("Best acc1=%.5f" % best_acc1)
 
@@ -237,216 +351,8 @@ def main():
             'state_dict': model.state_dict(),
             'best_acc1': best_acc1,
             'optimizer' : optimizer.state_dict()
-            }, is_best, path=args.tmp)
-    # evaluate before pruning
-    logger.info("evaluating before pruning...")
-    validate(val_loader, model, args.epochs)
+            }, is_best, path=args.tmp, filename="checkpoint-retrain0.pth")
 
-    factors = get_factors(model)
-    sparsity = get_sparsity(factors)
-    factors1 = [j for i in factors.values() for j in i]
-    factors1 = np.sort(np.array(factors1))
-    thres = factors1[int(factors1.size * 0.7)]
-    logger.info("Model sparsity: %f"%sparsity)
-    logger.info("Pruning threshold: %f"%thres)
-
-    # mask pruning
-    prune_mask = {}
-    for idx, (name, m) in enumerate(model.named_modules()):
-        if not isinstance(m, nn.BatchNorm2d):
-            continue
-        factor = factors[name]
-        prune_mask[name] = (factor >= thres)
-        m.weight.data[1-prune_mask[name]] = 0
-        m.bias.data[1-prune_mask[name]] = 0
-
-    mask_output = model(random_input)
-    diff = (origin_output - mask_output).abs().sum()
-    logger.info("Output diff: %f"%diff)
-
-    logger.info("evaluating after masking...")
-    validate(val_loader, model, args.epochs)
-    
-
-    # do real pruning
-    for idx, (name, m) in enumerate(named_modules.items()):
-        if not isinstance(m, nn.BatchNorm2d):
-            continue
-
-        previous_conv = modules[idx-1]
-        
-        nextid = idx+1
-        next_conv = modules[nextid]
-        while not (isinstance(next_conv, nn.Conv2d) or isinstance(next_conv, nn.Linear)):
-            next_conv = modules[nextid]
-            nextid += 1
-
-        assert isinstance(previous_conv, nn.Conv2d), type(previous_conv)
-        assert isinstance(next_conv, nn.Conv2d) or isinstance(next_conv, nn.Linear), type(next_conv)
-
-        mask = prune_mask[name]
-
-        m.weight.data = m.weight.data[mask]
-        m.bias.data = m.bias.data[mask]
-        m.running_mean = m.running_mean[mask]
-        m.running_var = m.running_var[mask]
-
-        previous_conv.weight.data = previous_conv.weight.data[mask]
-        previous_conv.bias.data = previous_conv.bias.data[mask]
-
-        next_conv.weight.data = next_conv.weight.data[:, mask]
-
-    logger.info("evaluating after real pruning...")
-    validate(val_loader, model, args.epochs)
-
-    logger.info("Optimization done, ALL results saved to %s." % args.tmp)
-
-    
-
-    
-
-    torch.save(prune_mask, join(args.tmp, "prune_mask.pth"))
-
-    
-    diff = (origin_output - mask_output).abs().sum()
-    logger.info("output diff %f"%diff)
-    
-
-    raise ValueError("stop")
-
-    # resume initial weights
-    model = vgg_cifar.vgg16_bn(num_classes=100).cuda()
-    init_weights = torch.load(join(args.tmp, "initial-weights.pth"))
-    model.load_state_dict(init_weights['state_dict'])
-
-    
-
-
-    for p in model.parameters():
-        if p.grad is not None:
-            p.grad = None
-
-    if args.retrain:
-        logger.info("Starting retraining with original random initiation:")
-        logger.info("Parameters after real pruning")
-        for name, p in model.named_parameters():
-            logger.info("%s, shape=%s, std=%f, mean=%f" % \
-                    (name, str(p.shape), p.std().item(), p.mean().item()))
-    
-        optimizer = torch.optim.SGD(
-            model.parameters(),
-            lr=args.lr,
-            momentum=args.momentum,
-            weight_decay=args.weight_decay
-        )
-        scheduler = lr_scheduler.MultiStepLR(optimizer,
-                      milestones=milestones,
-                      gamma=0.1)
-        best_acc1 = 0
-        for epoch in range(0, args.epochs):
-
-            # train and evaluate
-            loss = train(train_loader, model, optimizer, epoch)
-            acc1, acc5 = validate(val_loader, model, epoch)
-            scheduler.step()
-
-            lr = optimizer.param_groups[0]["lr"]
-
-            tfboard_writer.add_scalar('retrain0/loss_epoch', loss, epoch)
-            tfboard_writer.add_scalar('retrain0/lr_epoch', lr, epoch)
-
-            tfboard_writer.add_scalar('retest0/acc1_epoch', acc1, epoch)
-            tfboard_writer.add_scalar('retest0/acc5_epoch', acc5, epoch)
-
-            # remember best prec@1 and save checkpoint
-            is_best = acc1 > best_acc1
-
-            if is_best:
-                best_acc1 = acc1
-
-            # log parameters details
-            logger.info("Epoch %d parameters details:" % epoch)
-
-            for name, p in model.named_parameters():
-                logger.info("%s, shape=%s, std=%f, mean=%f" % \
-                        (name, str(p.shape), p.std().item(), p.mean().item()))
-
-            logger.info("Best acc1=%.5f" % best_acc1)
-
-            # save checkpoint
-            save_checkpoint({
-                'epoch': epoch + 1,
-                'state_dict': model.state_dict(),
-                'best_acc1': best_acc1,
-                'optimizer' : optimizer.state_dict()
-                }, is_best, path=args.tmp, filename="checkpoint-retrain0.pth")
-
-
-        # reinitiate parameters and retrain
-        optimizer = torch.optim.SGD(
-            model.parameters(),
-            lr=args.lr,
-            momentum=args.momentum,
-            weight_decay=args.weight_decay
-        )
-        scheduler = lr_scheduler.MultiStepLR(optimizer,
-                      milestones=milestones,
-                      gamma=0.1)
-        for m in model.modules():
-            if isinstance(m, nn.Conv2d):
-                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
-                if m.bias is not None:
-                    nn.init.constant_(m.bias, 0)
-            elif isinstance(m, nn.BatchNorm2d):
-                nn.init.constant_(m.weight, 1)
-                nn.init.constant_(m.bias, 0)
-            elif isinstance(m, nn.Linear):
-                nn.init.normal_(m.weight, 0, 0.01)
-                nn.init.constant_(m.bias, 0)
-
-        logger.info("Starting retraining with reinitiation:")
-        logger.info("Parameters after reinitiation")
-        for name, p in model.named_parameters():
-            logger.info("%s, shape=%s, std=%f, mean=%f" % \
-                    (name, str(p.shape), p.std().item(), p.mean().item()))
-        best_acc1 = 0
-        for epoch in range(0, args.epochs):
-
-            # train and evaluate
-            loss = train(train_loader, model, optimizer, epoch)
-            acc1, acc5 = validate(val_loader, model, epoch)
-            scheduler.step()
-
-            lr = optimizer.param_groups[0]["lr"]
-
-            tfboard_writer.add_scalar('retrain1/loss_epoch', loss, epoch)
-            tfboard_writer.add_scalar('retrain1/lr_epoch', lr, epoch)
-
-            tfboard_writer.add_scalar('retest1/acc1_epoch', acc1, epoch)
-            tfboard_writer.add_scalar('retest1/acc5_epoch', acc5, epoch)
-
-            # remember best prec@1 and save checkpoint
-            is_best = acc1 > best_acc1
-
-            if is_best:
-                best_acc1 = acc1
-
-            # log parameters details
-            logger.info("Epoch %d parameters details:" % epoch)
-
-            for name, p in model.named_parameters():
-                logger.info("%s, shape=%s, std=%f, mean=%f" % \
-                        (name, str(p.shape), p.std().item(), p.mean().item()))
-
-            logger.info("Best acc1=%.5f" % best_acc1)
-
-            # save checkpoint
-            save_checkpoint({
-                'epoch': epoch + 1,
-                'state_dict': model.state_dict(),
-                'best_acc1': best_acc1,
-                'optimizer' : optimizer.state_dict()
-                }, is_best, path=args.tmp, filename="checkpoint-retrain1.pth")
 
 def train(train_loader, model, optimizer, epoch):
     batch_time = AverageMeter()
