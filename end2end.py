@@ -140,7 +140,9 @@ def main():
     train_loader, val_loader = vlpytorch.datasets.cifar100(abspath("/home/kai/.torch/data"), bs=args.bs)
 
     # model and optimizer
-    model = vgg_cifar.vgg16_bn(num_classes=100).cuda()
+    model_name = "vgg_cifar.vgg16_bn(num_classes=100)"
+    model = eval(model_name).cuda()
+
     optimizer = torch.optim.SGD(
         model.parameters(),
         lr=args.lr,
@@ -262,10 +264,10 @@ def main():
             prune_mask[name] = factor >= factor.max() * 0.01
 
         total_filters += factor.numel()
-        pruned_filters += (1-prune_mask[name]).sum()
+        pruned_filters += (prune_mask[name].bitwise_not()).sum()
 
-        m.weight.data[1-prune_mask[name]] = 0
-        m.bias.data[1-prune_mask[name]] = 0
+        m.weight.data[prune_mask[name].bitwise_not()] = 0
+        m.bias.data[prune_mask[name].bitwise_not()] = 0
 
     prune_rate = float(pruned_filters)/total_filters
     logger.info("Totally %d filters, %d has been pruned, pruning rate %f"%(total_filters, pruned_filters, prune_rate))
@@ -273,6 +275,9 @@ def main():
     logger.info("evaluating after masking...")
     validate(val_loader, model, args.epochs)
 
+    # reload model
+    model = eval(model_name).cuda()
+    model.load_state_dict(torch.load(join(args.tmp, "checkpoint.pth"))["state_dict"])
 
     # do real pruning
     modules = list(model.modules())
@@ -304,6 +309,10 @@ def main():
             previous_conv.bias.data = previous_conv.bias.data[mask]
 
             next_conv.weight.data = next_conv.weight.data[:, mask]
+
+    # clear gradients
+    for p in model.parameters():
+        p.grad = None
 
     logger.info("evaluating after real pruning...")
     validate(val_loader, model, args.epochs)
