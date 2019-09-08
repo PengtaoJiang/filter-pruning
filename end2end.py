@@ -25,14 +25,14 @@ parser.add_argument('--config', default='configs/basic.yml', help='path to datas
 
 parser.add_argument('--start-epoch', default=0, type=int, metavar='N',
                     help='manual epoch number (useful on restarts)')
-parser.add_argument('--print-freq', default=20, type=int,
+parser.add_argument('--print-freq', default=50, type=int,
                     metavar='N', help='print frequency (default: 10)')
 parser.add_argument('--model', metavar='STR', default=None, help='model')
 parser.add_argument('--data', metavar='DIR', default=None, help='path to dataset')
 parser.add_argument('--num_classes', default=None, type=int, metavar='N', help='Number of classes')
 parser.add_argument('--bs', '--batch-size', default=64, type=int,
                     metavar='N', help='mini-batch size')
-parser.add_argument('--epochs', default=200, type=int, metavar='N',
+parser.add_argument('--epochs', default=160, type=int, metavar='N',
                     help='number of total epochs to run')
 parser.add_argument('--lr', '--learning-rate', default=0.1, type=float,
                     metavar='LR', help='initial learning rate')
@@ -55,7 +55,7 @@ parser.add_argument('--prune-type', type=int, default=0, help="prune method")
 parser.add_argument('--percent', type=float, default=0.3, help='pruning percent')
 args = parser.parse_args()
 
-milestones = [100, 150, 180]
+milestones = [80, 120]
 
 if args.randseed == None:
     args.randseed = np.random.randint(1000)
@@ -146,6 +146,7 @@ def main():
     optimizer = torch.optim.SGD(
         model.parameters(),
         lr=args.lr,
+        nesterov=True,
         momentum=args.momentum,
         weight_decay=args.weight_decay
     )
@@ -406,7 +407,7 @@ def train(train_loader, model, optimizer, epoch):
         end = time.time()
         lr = optimizer.param_groups[0]["lr"]
 
-        if i % 20 == 0:
+        if i % args.print_freq == 0:
             logger.info('Epoch[{0}/{1}] Iter[{2}/{3}]\t'
                   'Batch Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                   'Data Time {data_time.val:.3f} ({data_time.avg:.3f})\t'
