@@ -120,7 +120,7 @@ def get_factors(model):
             elif args.prune_type == 1:
                 factors[name] = factor
             elif args.prune_type == 2:
-                factors[name] = bnw
+                factors[name] = factor
             else:
                 raise ValueError("?")
 
