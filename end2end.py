@@ -203,10 +203,11 @@ def main():
 
         logger.info("Best acc1=%.5f" % best_acc1)
 
+        sparsity = get_sparsity(get_factors(model))
+
         # for prune-type == 2
         if args.prune_type == 2:
             target_sparsity = args.percent
-            sparsity = get_sparsity(get_factors(model))
             sparsity_gain = (sparsity - last_sparsity)
             expected_sparsity_gain = (target_sparsity - sparsity) / (args.epochs - epoch)
             if sparsity < target_sparsity:
@@ -232,6 +233,8 @@ def main():
         tfboard_writer.add_scalar('train/loss_epoch', loss, epoch)
         tfboard_writer.add_scalar('train/lr_epoch', lr, epoch)
         tfboard_writer.add_scalar('train/BN-L1', bn_l1, epoch)
+        tfboard_writer.add_scalar('train/model sparsity', sparsity, epoch)
+        tfboard_writer.add_scalar('train/sparse penalty', args.sparsity, epoch)
 
         tfboard_writer.add_scalar('test/acc1_epoch', acc1, epoch)
         tfboard_writer.add_scalar('test/acc5_epoch', acc5, epoch)
