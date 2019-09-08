@@ -318,7 +318,9 @@ def main():
         p.grad = None
 
     logger.info("evaluating after real pruning...")
-    validate(val_loader, model, args.epochs)
+    acc1, acc5 = validate(val_loader, model, args.epochs)
+    tfboard_writer.add_scalar('retrain/acc1_epoch', acc1, -1)
+    tfboard_writer.add_scalar('retrain/acc5_epoch', acc5, -1)
 
     # retrain
     optimizer_retrain = torch.optim.SGD(
