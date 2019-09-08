@@ -30,7 +30,7 @@ parser.add_argument('--print-freq', default=20, type=int,
 parser.add_argument('--model', metavar='STR', default=None, help='model')
 parser.add_argument('--data', metavar='DIR', default=None, help='path to dataset')
 parser.add_argument('--num_classes', default=None, type=int, metavar='N', help='Number of classes')
-parser.add_argument('--bs', '--batch-size', default=256, type=int,
+parser.add_argument('--bs', '--batch-size', default=64, type=int,
                     metavar='N', help='mini-batch size')
 parser.add_argument('--epochs', default=200, type=int, metavar='N',
                     help='number of total epochs to run')
