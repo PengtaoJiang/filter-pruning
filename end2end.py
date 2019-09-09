@@ -47,13 +47,15 @@ parser.add_argument('--tmp', help='tmp folder', default="tmp/prune")
 parser.add_argument('--randseed', type=int, help='random seed', default=None)
 #
 parser.add_argument('--no-retrain', action="store_true")
-parser.add_argument('--sparsity', type=float, default=1e-5, help='sparsity regularization')
+parser.add_argument('--sparsity', type=float, default=1e-4, help='sparsity regularization')
 parser.add_argument('--retrain', action="store_true")
 parser.add_argument('--prune-type', type=int, default=0, help="prune method")
-parser.add_argument('--percent', type=float, default=0.3, help='pruning percent')
+parser.add_argument('--percent', type=float, default=0.5, help='pruning percent')
 args = parser.parse_args()
 
 milestones = [int(i) for i in args.milestones.split(',')]
+if args.prune_type == 2:
+    args.sparsity = 1e-5
 
 if args.randseed == None:
     args.randseed = np.random.randint(1000)
