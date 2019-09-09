@@ -46,7 +46,7 @@ parser.add_argument('--resume', default="", type=str, metavar='PATH',
 parser.add_argument('--tmp', help='tmp folder', default="tmp/prune")
 parser.add_argument('--randseed', type=int, help='random seed', default=None)
 #
-parser.add_argument('--no-retrain', action="store_false")
+parser.add_argument('--no-retrain', action="store_true")
 parser.add_argument('--sparsity', type=float, default=1e-5, help='sparsity regularization')
 parser.add_argument('--retrain', action="store_true")
 parser.add_argument('--prune-type', type=int, default=0, help="prune method")
@@ -239,9 +239,6 @@ def main():
 
     logger.info("Optimization done, ALL results saved to %s." % args.tmp)
 
-    # shutdown when `args.no-retrain` is triggered
-    if args.no_retrain: return
-
     # evaluate before pruning
     logger.info("evaluating before pruning...")
     validate(val_loader, model, args.epochs)
@@ -322,6 +319,9 @@ def main():
     acc1, acc5 = validate(val_loader, model, args.epochs)
     tfboard_writer.add_scalar('retrain/acc1_epoch', acc1, -1)
     tfboard_writer.add_scalar('retrain/acc5_epoch', acc5, -1)
+
+    # shutdown when `args.no-retrain` is triggered
+    if args.no_retrain: return
 
     # retrain
     optimizer_retrain = torch.optim.SGD(
