@@ -395,10 +395,10 @@ def train(train_loader, model, optimizer, epoch):
         loss.backward()
 
         # impose L1 penalty to BN factors
-        for m in model.modules():
-
-            if isinstance(m, nn.BatchNorm2d):
-                m.weight.grad.data.add_(args.sparsity*torch.sign(m.weight.data))  # L1
+        if args.sparsity != 0:
+            for m in model.modules():
+                if isinstance(m, nn.BatchNorm2d):
+                    m.weight.grad.data.add_(args.sparsity*torch.sign(m.weight.data))  # L1
 
         optimizer.step()
 
