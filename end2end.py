@@ -146,7 +146,6 @@ def main():
     optimizer = torch.optim.SGD(
         model.parameters(),
         lr=args.lr,
-        nesterov=True,
         momentum=args.momentum,
         weight_decay=args.weight_decay
     )
@@ -218,7 +217,7 @@ def main():
                     args.sparsity += 1e-5
             else:
                 # over sparse
-                if sparsity > last_sparsity and args.sparsity > 0:
+                if sparsity > last_sparsity and args.sparsity > 0 and args.sparsity > 0:
                     args.sparsity -= 1e-5
 
             logger.info("Sparse rate=%f (last=%f, target=%f), args.sparsity=%f" %\
