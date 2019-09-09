@@ -340,7 +340,7 @@ def main():
         acc1, acc5 = validate(val_loader, model, epoch)
         scheduler_retrain.step()
 
-        lr = optimizer.param_groups[0]["lr"]
+        lr = optimizer_retrain.param_groups[0]["lr"]
 
         tfboard_writer.add_scalar('retrain/loss_epoch', loss, epoch)
         tfboard_writer.add_scalar('retrain/lr_epoch', lr, epoch)
