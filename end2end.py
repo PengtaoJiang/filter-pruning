@@ -20,9 +20,6 @@ import vgg_cifar
 from tensorboardX import SummaryWriter
 
 parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
-# arguments from command line
-parser.add_argument('--config', default='configs/basic.yml', help='path to dataset')
-
 parser.add_argument('--start-epoch', default=0, type=int, metavar='N',
                     help='manual epoch number (useful on restarts)')
 parser.add_argument('--print-freq', default=50, type=int,
@@ -30,18 +27,18 @@ parser.add_argument('--print-freq', default=50, type=int,
 parser.add_argument('--model', metavar='STR', default=None, help='model')
 parser.add_argument('--data', metavar='DIR', default=None, help='path to dataset')
 parser.add_argument('--num_classes', default=None, type=int, metavar='N', help='Number of classes')
-parser.add_argument('--bs', '--batch-size', default=64, type=int,
+parser.add_argument('--bs', '--batch-size', default=128, type=int,
                     metavar='N', help='mini-batch size')
-parser.add_argument('--epochs', default=160, type=int, metavar='N',
+parser.add_argument('--epochs', default=200, type=int, metavar='N',
                     help='number of total epochs to run')
 parser.add_argument('--lr', '--learning-rate', default=0.1, type=float,
                     metavar='LR', help='initial learning rate')
 parser.add_argument('--stepsize', '--step-size', default=None, type=int,
                     metavar='SS', help='decrease learning rate every stepsize epochs')
-parser.add_argument('--gamma', default=None, type=float,
+parser.add_argument('--gamma', default=0.2, type=float,
                     metavar='GM', help='decrease learning rate by gamma')
-parser.add_argument('--momentum', default=0.9, type=float, metavar='M',
-                    help='momentum')
+parser.add_argument('--milestones', default="100,150", type=str)
+parser.add_argument('--momentum', default=0.9, type=float, metavar='M', help='momentum')
 parser.add_argument('--weight-decay', '--wd', default=1e-4, type=float,
                     metavar='W', help='weight decay')
 parser.add_argument('--resume', default="", type=str, metavar='PATH',
@@ -55,7 +52,7 @@ parser.add_argument('--prune-type', type=int, default=0, help="prune method")
 parser.add_argument('--percent', type=float, default=0.3, help='pruning percent')
 args = parser.parse_args()
 
-milestones = [80, 120]
+milestones = [int(i) for i in args.milestones.split(',')]
 
 if args.randseed == None:
     args.randseed = np.random.randint(1000)
@@ -181,7 +178,7 @@ def main():
 
     scheduler = lr_scheduler.MultiStepLR(optimizer,
                       milestones=milestones,
-                      gamma=0.1)
+                      gamma=args.gamma)
 
     last_sparsity = get_sparsity(get_factors(model))
     for epoch in range(args.start_epoch, args.epochs):
@@ -331,7 +328,7 @@ def main():
     )
     scheduler_retrain = lr_scheduler.MultiStepLR(optimizer_retrain,
                       milestones=milestones,
-                      gamma=0.1)
+                      gamma=args.gamma)
     best_acc1 = 0
     for epoch in range(0, args.epochs):
 
