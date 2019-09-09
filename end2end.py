@@ -46,6 +46,7 @@ parser.add_argument('--resume', default="", type=str, metavar='PATH',
 parser.add_argument('--tmp', help='tmp folder', default="tmp/prune")
 parser.add_argument('--randseed', type=int, help='random seed', default=None)
 #
+parser.add_argument('--no-retrain', action="store_false")
 parser.add_argument('--sparsity', type=float, default=1e-5, help='sparsity regularization')
 parser.add_argument('--retrain', action="store_true")
 parser.add_argument('--prune-type', type=int, default=0, help="prune method")
@@ -237,6 +238,9 @@ def main():
         tfboard_writer.add_scalar('test/acc5_epoch', acc5, epoch)
 
     logger.info("Optimization done, ALL results saved to %s." % args.tmp)
+
+    # shutdown when `args.no-retrain` is triggered
+    if args.no_retrain: return
 
     # evaluate before pruning
     logger.info("evaluating before pruning...")
