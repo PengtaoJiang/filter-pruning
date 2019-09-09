@@ -37,7 +37,7 @@ parser.add_argument('--stepsize', '--step-size', default=None, type=int,
                     metavar='SS', help='decrease learning rate every stepsize epochs')
 parser.add_argument('--gamma', default=0.2, type=float,
                     metavar='GM', help='decrease learning rate by gamma')
-parser.add_argument('--milestones', default="100,150", type=str)
+parser.add_argument('--milestones', default="60,120,160", type=str)
 parser.add_argument('--momentum', default=0.9, type=float, metavar='M', help='momentum')
 parser.add_argument('--weight-decay', '--wd', default=1e-4, type=float,
                     metavar='W', help='weight decay')
