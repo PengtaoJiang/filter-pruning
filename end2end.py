@@ -203,26 +203,26 @@ def main():
 
         logger.info("Best acc1=%.5f" % best_acc1)
 
-        sparsity = get_sparsity(get_factors(model))
+        model_sparsity = get_sparsity(get_factors(model))
 
         # for prune-type == 2
         if args.prune_type == 2:
             target_sparsity = args.percent
-            sparsity_gain = (sparsity - last_sparsity)
-            expected_sparsity_gain = (target_sparsity - sparsity) / (args.epochs - epoch)
-            if sparsity < target_sparsity:
+            sparsity_gain = (model_sparsity - last_sparsity)
+            expected_sparsity_gain = (target_sparsity - model_sparsity) / (args.epochs - epoch)
+            if model_sparsity < target_sparsity:
                 # not sparse enough
-                if  sparsity_gain < expected_sparsity_gain:
+                if sparsity_gain < expected_sparsity_gain:
                     logger.info("Sparsity gain %f (expected%f), increasing sparse penalty."%(sparsity_gain, expected_sparsity_gain))
                     args.sparsity += 1e-5
-            else:
+            elif model_sparsity > target_sparsity:
                 # over sparse
-                if sparsity > last_sparsity and args.sparsity > 0 and args.sparsity > 0:
+                if model_sparsity > last_sparsity and args.sparsity > 0:
                     args.sparsity -= 1e-5
 
-            logger.info("Sparse rate=%f (last=%f, target=%f), args.sparsity=%f" %\
-                (sparsity, last_sparsity, target_sparsity, args.sparsity))
-            last_sparsity = sparsity
+            logger.info("Model sparsity=%f (last=%f, target=%f), args.sparsity=%f" %\
+                (model_sparsity, last_sparsity, target_sparsity, args.sparsity))
+            last_sparsity = model_sparsity
 
         lr = optimizer.param_groups[0]["lr"]
         bn_l1 = 0
@@ -233,7 +233,7 @@ def main():
         tfboard_writer.add_scalar('train/loss_epoch', loss, epoch)
         tfboard_writer.add_scalar('train/lr_epoch', lr, epoch)
         tfboard_writer.add_scalar('train/BN-L1', bn_l1, epoch)
-        tfboard_writer.add_scalar('train/model sparsity', sparsity, epoch)
+        tfboard_writer.add_scalar('train/model sparsity', model_sparsity, epoch)
         tfboard_writer.add_scalar('train/sparse penalty', args.sparsity, epoch)
 
         tfboard_writer.add_scalar('test/acc1_epoch', acc1, epoch)
