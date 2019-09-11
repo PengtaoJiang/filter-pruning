@@ -62,6 +62,10 @@ if args.randseed == None:
 args.tmp = args.tmp.strip("/")
 args.tmp = args.tmp+"-seed%d"%args.randseed
 
+# sparsity penalty starts from 1e-5 when prune_type = 2
+if args.prune_type == 2:
+    args.sparsity = 1e-5
+
 # Random seed
 # According to https://pytorch.org/docs/master/notes/randomness.html
 np.random.seed(args.randseed)
@@ -347,7 +351,7 @@ def main():
     )
     scheduler_retrain = WarmupLR(max_iters=len(train_loader)*args.epochs, lr=1e-3, warmup_iters=5*len(train_loader))
     best_acc1 = 0
-    for epoch in range(0, args.epochs):
+    for epoch in range(0, 20):
 
         # train and evaluate
         loss = train(train_loader, model, optimizer_retrain, scheduler_retrain, epoch)
