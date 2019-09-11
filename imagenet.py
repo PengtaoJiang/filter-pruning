@@ -481,7 +481,6 @@ def validate(val_loader, model, epoch):
                 data = torch.cat([i["data"].to(torch.device('cuda:0')) for i in data], dim=0)
                 target = target.cuda(non_blocking=True).squeeze().long()
             else:
-                data, target = data
                 data = data.cuda()
                 target = target.cuda(non_blocking=True)
 
