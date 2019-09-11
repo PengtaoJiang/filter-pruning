@@ -29,15 +29,13 @@ parser.add_argument('--print-freq', default=50, type=int,
                     metavar='N', help='print frequency (default: 10)')
 parser.add_argument('--model', metavar='STR', default=None, help='model')
 parser.add_argument('--data', metavar='DIR', default="/media/ssd0/ilsvrc12/rec", help='path to dataset')
-parser.add_argument('--batch-size', default=128, type=int,
+parser.add_argument('--batch-size', default=256, type=int,
                     metavar='N', help='mini-batch size')
-parser.add_argument('--epochs', default=200, type=int, metavar='N',
+parser.add_argument('--epochs', default=120, type=int, metavar='N',
                     help='number of total epochs to run')
 parser.add_argument('--lr', '--learning-rate', default=0.1, type=float,
                     metavar='LR', help='initial learning rate')
-parser.add_argument('--stepsize', '--step-size', default=None, type=int,
-                    metavar='SS', help='decrease learning rate every stepsize epochs')
-parser.add_argument('--gamma', default=0.2, type=float,
+parser.add_argument('--gamma', default=0.1, type=float,
                     metavar='GM', help='decrease learning rate by gamma')
 parser.add_argument('--milestones', default="30,60,90", type=str)
 parser.add_argument('--momentum', default=0.9, type=float, metavar='M', help='momentum')
@@ -142,7 +140,7 @@ def main():
     logger.info(args)
 
     # model and optimizer
-    model_name = "torchvision.models.vgg16_bn()"
+    model_name = "torchvision.models.vgg11_bn()"
     model = eval(model_name)
 
     # reinitiate bn factors to 0.5
