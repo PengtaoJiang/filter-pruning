@@ -144,6 +144,7 @@ def main():
     logger.info(args)
 
     # model and optimizer
+    # model_name = "torchvision.models.vgg11_bn(pretrained=True)"
     model_name = "torchvision.models.vgg11_bn()"
     model = eval(model_name)
     model = nn.DataParallel(model.cuda())
@@ -401,7 +402,7 @@ def train(train_loader, model, optimizer, lr_scheduler, epoch):
     model.train()
 
     end = time.time()
-    for i, (data) in enumerate(train_loader):
+    for i, data in enumerate(train_loader):
         # measure data loading time
         data_time.update(time.time() - end)
 
@@ -474,13 +475,14 @@ def validate(val_loader, model, epoch):
 
     with torch.no_grad():
         end = time.time()
-        for i, (data, target) in enumerate(val_loader):
+        for i, data in enumerate(val_loader):
             
             if args.use_dali:
                 target = torch.cat([i["label"].to(torch.device('cuda:0')) for i in data], dim=0)
                 data = torch.cat([i["data"].to(torch.device('cuda:0')) for i in data], dim=0)
                 target = target.cuda(non_blocking=True).squeeze().long()
             else:
+                data, target = data
                 data = data.cuda()
                 target = target.cuda(non_blocking=True)
 
