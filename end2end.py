@@ -15,6 +15,7 @@ from vltools import image as vlimage
 from vltools.pytorch import save_checkpoint, AverageMeter, accuracy
 from vltools.pytorch.datasets import ilsvrc2012
 import vltools.pytorch as vlpytorch
+from vltools.tcm import CosAnnealingLR
 
 import vgg_cifar
 from tensorboardX import SummaryWriter
@@ -35,9 +36,9 @@ parser.add_argument('--lr', '--learning-rate', default=0.1, type=float,
                     metavar='LR', help='initial learning rate')
 parser.add_argument('--stepsize', '--step-size', default=None, type=int,
                     metavar='SS', help='decrease learning rate every stepsize epochs')
-parser.add_argument('--gamma', default=0.2, type=float,
+parser.add_argument('--gamma', default=0.1, type=float,
                     metavar='GM', help='decrease learning rate by gamma')
-parser.add_argument('--milestones', default="60,120,160", type=str)
+parser.add_argument('--milestones', default="100,150", type=str)
 parser.add_argument('--momentum', default=0.9, type=float, metavar='M', help='momentum')
 parser.add_argument('--weight-decay', '--wd', default=1e-4, type=float,
                     metavar='W', help='weight decay')
@@ -50,7 +51,7 @@ parser.add_argument('--no-retrain', action="store_true")
 parser.add_argument('--sparsity', type=float, default=1e-4, help='sparsity regularization')
 parser.add_argument('--retrain', action="store_true")
 parser.add_argument('--prune-type', type=int, default=0, help="prune method")
-parser.add_argument('--percent', type=float, default=0.5, help='pruning percent')
+parser.add_argument('--percent', type=float, default=0.3, help='pruning percent')
 args = parser.parse_args()
 
 milestones = [int(i) for i in args.milestones.split(',')]
@@ -142,6 +143,7 @@ def main():
     # model and optimizer
     model_name = "vgg_cifar.vgg16_bn(num_classes=100)"
     model = eval(model_name).cuda()
+    model = nn.DataParallel(model)
 
     optimizer = torch.optim.SGD(
         model.parameters(),
@@ -179,17 +181,14 @@ def main():
         else:
             logger.info("=> no checkpoint found at '{}'".format(args.resume))
 
-    scheduler = lr_scheduler.MultiStepLR(optimizer,
-                      milestones=milestones,
-                      gamma=args.gamma)
+    scheduler = CosAnnealingLR(len(train_loader)*args.epochs, lr_max=args.lr, lr_min=0, warmup_iters=5*len(train_loader))
 
     last_sparsity = get_sparsity(get_factors(model))
     for epoch in range(args.start_epoch, args.epochs):
 
         # train and evaluate
-        loss = train(train_loader, model, optimizer, epoch)
+        loss = train(train_loader, model, optimizer, scheduler, epoch)
         acc1, acc5 = validate(val_loader, model, epoch)
-        scheduler.step()
         # remember best prec@1 and save checkpoint
         is_best = acc1 > best_acc1
         if is_best:
@@ -210,13 +209,17 @@ def main():
             target_sparsity = args.percent
             sparsity_gain = (model_sparsity - last_sparsity)
             expected_sparsity_gain = (target_sparsity - model_sparsity) / (args.epochs - epoch)
+
+            # not sparse enough
             if model_sparsity < target_sparsity:
-                # not sparse enough
+                # 1st order
                 if sparsity_gain < expected_sparsity_gain:
                     logger.info("Sparsity gain %f (expected%f), increasing sparse penalty."%(sparsity_gain, expected_sparsity_gain))
                     args.sparsity += 1e-5
+                elif sparsity_gain > expected_sparsity_gain:
+                    args.sparsity -= 1e-5
+            # over sparse
             elif model_sparsity > target_sparsity:
-                # over sparse
                 if model_sparsity > last_sparsity and args.sparsity > 0:
                     args.sparsity -= 1e-5
 
@@ -245,6 +248,8 @@ def main():
     logger.info("evaluating before pruning...")
     validate(val_loader, model, args.epochs)
 
+    # calculate pruning mask
+    model = model.module
     factors = get_factors(model)
     sparsity = get_sparsity(factors)
     factors_all = torch.cat(list(factors.values()))
@@ -272,6 +277,9 @@ def main():
         m.weight.data[prune_mask[name].bitwise_not()] = 0
         m.bias.data[prune_mask[name].bitwise_not()] = 0
 
+    # warp back to nn.DataParallel
+    model = nn.DataParallel(model.cuda())
+
     prune_rate = float(pruned_filters)/total_filters
     logger.info("Totally %d filters, %d has been pruned, pruning rate %f"%(total_filters, pruned_filters, prune_rate))
 
@@ -279,10 +287,13 @@ def main():
     validate(val_loader, model, args.epochs)
 
     # reload model
+    del model
     model = eval(model_name).cuda()
+    model = nn.DataParallel(model)
     model.load_state_dict(torch.load(join(args.tmp, "checkpoint.pth"))["state_dict"])
 
     # do real pruning
+    model = model.module
     modules = list(model.modules())
     named_modules = dict(model.named_modules())
     with torch.no_grad(): 
@@ -313,6 +324,9 @@ def main():
 
             next_conv.weight.data = next_conv.weight.data[:, mask]
 
+    # warp back to nn.DataParallel
+    model = nn.DataParallel(model)
+
     # clear gradients
     for p in model.parameters():
         p.grad = None
@@ -332,16 +346,13 @@ def main():
         momentum=args.momentum,
         weight_decay=args.weight_decay
     )
-    scheduler_retrain = lr_scheduler.MultiStepLR(optimizer_retrain,
-                      milestones=milestones,
-                      gamma=args.gamma)
+    scheduler_retrain = CosAnnealingLR(len(train_loader)*args.epochs, lr_max=args.lr, lr_min=0, warmup_iters=5*len(train_loader))
     best_acc1 = 0
     for epoch in range(0, args.epochs):
 
         # train and evaluate
-        loss = train(train_loader, model, optimizer_retrain, epoch)
+        loss = train(train_loader, model, optimizer_retrain, scheduler_retrain, epoch)
         acc1, acc5 = validate(val_loader, model, epoch)
-        scheduler_retrain.step()
 
         lr = optimizer_retrain.param_groups[0]["lr"]
 
@@ -367,7 +378,7 @@ def main():
             }, is_best, path=args.tmp, filename="checkpoint-retrain0.pth")
 
 
-def train(train_loader, model, optimizer, epoch):
+def train(train_loader, model, optimizer, lr_scheduler, epoch):
     batch_time = AverageMeter()
     data_time = AverageMeter()
     losses = AverageMeter()
@@ -395,6 +406,11 @@ def train(train_loader, model, optimizer, epoch):
         # compute gradient and do SGD step
         optimizer.zero_grad()
         loss.backward()
+
+        # adjust lr
+        lr = lr_scheduler.step()
+        for pg in optimizer.param_groups:
+            pg["lr"] = lr
 
         # impose L1 penalty to BN factors
         if args.sparsity != 0:
