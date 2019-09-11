@@ -16,6 +16,7 @@ from vltools import image as vlimage
 from vltools.pytorch import save_checkpoint, AverageMeter, accuracy
 from vltools.pytorch.datasets import ilsvrc2012
 import vltools.pytorch as vlpytorch
+from vltools.tcm import CosAnnealingLR, WarmupLR, WarmupStepLR
 
 from dali_ilsvrc import dali_ilsvrc_loader
 
@@ -31,7 +32,7 @@ parser.add_argument('--model', metavar='STR', default=None, help='model')
 parser.add_argument('--data', metavar='DIR', default="/media/ssd0/ilsvrc12/rec", help='path to dataset')
 parser.add_argument('--batch-size', default=256, type=int,
                     metavar='N', help='mini-batch size')
-parser.add_argument('--epochs', default=120, type=int, metavar='N',
+parser.add_argument('--epochs', default=100, type=int, metavar='N',
                     help='number of total epochs to run')
 parser.add_argument('--lr', '--learning-rate', default=0.1, type=float,
                     metavar='LR', help='initial learning rate')
@@ -192,15 +193,13 @@ def main():
         else:
             logger.info("=> no checkpoint found at '{}'".format(args.resume))
 
-    scheduler = lr_scheduler.MultiStepLR(optimizer,
-                      milestones=milestones,
-                      gamma=args.gamma)
+    scheduler = WarmupStepLR(step_size=30*len(train_loader), gamma=args.gamma, base_lr=args.lr, warmup_iters=0)
 
     last_sparsity = get_sparsity(get_factors(model))
     for epoch in range(args.start_epoch, args.epochs):
 
         # train and evaluate
-        loss = train(train_loader, model, optimizer, epoch)
+        loss = train(train_loader, model, optimizer, scheduler, epoch)
         acc1, acc5 = validate(val_loader, model, epoch)
         scheduler.step()
 
@@ -346,16 +345,13 @@ def main():
         momentum=args.momentum,
         weight_decay=args.weight_decay
     )
-    scheduler_retrain = lr_scheduler.MultiStepLR(optimizer_retrain,
-                      milestones=milestones,
-                      gamma=args.gamma)
+    scheduler_retrain = WarmupLR(max_iters=len(train_loader)*args.epochs, lr=1e-3, warmup_iters=5*len(train_loader))
     best_acc1 = 0
     for epoch in range(0, args.epochs):
 
         # train and evaluate
-        loss = train(train_loader, model, optimizer_retrain, epoch)
+        loss = train(train_loader, model, optimizer_retrain, scheduler_retrain, epoch)
         acc1, acc5 = validate(val_loader, model, epoch)
-        scheduler_retrain.step()
 
         lr = optimizer_retrain.param_groups[0]["lr"]
 
@@ -381,7 +377,7 @@ def main():
             }, is_best, path=args.tmp, filename="checkpoint-retrain0.pth")
 
 
-def train(train_loader, model, optimizer, epoch):
+def train(train_loader, model, optimizer, lr_scheduler, epoch):
     batch_time = AverageMeter()
     data_time = AverageMeter()
     losses = AverageMeter()
@@ -422,6 +418,10 @@ def train(train_loader, model, optimizer, epoch):
         # compute gradient and do SGD step
         optimizer.zero_grad()
         loss.backward()
+
+        lr = lr_scheduler.step()
+        for pg in optimizer.param_groups:
+            pg["lr"] = lr
 
         # impose L1 penalty to BN factors
         if args.sparsity != 0:
