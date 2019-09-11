@@ -107,16 +107,15 @@ def get_factors(model):
                 next_weight = next_weight.view(next_weight.shape[0], -1)
                 next_weight = torch.norm(next_weight, p=2, dim=1)
             else:
-                if isinstance(next_conv, nn.Conv2d):
-                    next_weight = next_weight.abs().mean(dim=(0,2,3))
-                elif isinstance(next_conv, nn.Linear):
-                    next_weight = next_weight.abs().mean(dim=(0))
+                if isinstance(next_conv, nn.Linear):
+                    # for vgg, the last conv outputs N 512 7 7 tensor
+                    # hence, the weight of the next Linear layer is: 4096 25088 (25088 = 512*7*7)
+                    next_weight = next_weight.view(4096, 512, 7, 7)
+
+                next_weight = next_weight.abs().mean(dim=(0,2,3))
 
             bnw = m.weight.data.abs()
-
-            if next_weight.numel() == 25088:
-                # in case of the last conv
-                factor = bnw
+            factor = bnw * next_weight
 
             # _, idx0 = bnw.sort()
             # _, idx1 = factor.sort()
@@ -147,12 +146,6 @@ def main():
     # model and optimizer
     model_name = "torchvision.models.vgg11_bn()"
     model = eval(model_name)
-
-    # reinitiate bn factors to 0.5
-    for m in model.modules():
-        if isinstance(m, nn.BatchNorm2d):
-            m.weight.data.fill_(0.5)
-    
     model = nn.DataParallel(model.cuda())
 
     optimizer = torch.optim.SGD(
@@ -170,8 +163,10 @@ def main():
     # dataloaders
     if args.use_dali:
         train_loader, val_loader = dali_ilsvrc_loader(args.data, num_gpus=2, batch_size=args.batch_size, num_threads_per_gpu=2)
+        train_batch_per_epoch = int(np.ceil(train_loader._size/args.batch_size))
     else:
         train_loader, val_loader = ilsvrc2012(args.data, bs=args.batch_size)
+        train_batch_per_epoch = len(train_loader)
 
     # records
     best_acc1 = 0
@@ -197,7 +192,7 @@ def main():
         else:
             logger.info("=> no checkpoint found at '{}'".format(args.resume))
 
-    scheduler = WarmupStepLR(step_size=30*len(train_loader), gamma=args.gamma, base_lr=args.lr, warmup_iters=0)
+    scheduler = WarmupStepLR(step_size=30*train_batch_per_epoch, gamma=args.gamma, base_lr=args.lr, warmup_iters=0)
 
     last_sparsity = get_sparsity(get_factors(model))
     for epoch in range(args.start_epoch, args.epochs):
@@ -262,6 +257,8 @@ def main():
     logger.info("evaluating before pruning...")
     validate(val_loader, model, args.epochs)
 
+    # calculate pruning mask
+    model = model.module
     factors = get_factors(model)
     sparsity = get_sparsity(factors)
     factors_all = torch.cat(list(factors.values()))
@@ -289,6 +286,8 @@ def main():
         m.weight.data[prune_mask[name].bitwise_not()] = 0
         m.bias.data[prune_mask[name].bitwise_not()] = 0
 
+    # warp back to nn.DataParallel
+    model = nn.DataParallel(model.cuda())
     prune_rate = float(pruned_filters)/total_filters
     logger.info("Totally %d filters, %d has been pruned, pruning rate %f"%(total_filters, pruned_filters, prune_rate))
 
@@ -296,10 +295,12 @@ def main():
     validate(val_loader, model, args.epochs)
 
     # reload model
-    model = eval(model_name).cuda()
+    model = eval(model_name)
+    
     model.load_state_dict(torch.load(join(args.tmp, "checkpoint.pth"))["state_dict"])
 
     # do real pruning
+    model = model.module
     modules = list(model.modules())
     named_modules = dict(model.named_modules())
     with torch.no_grad(): 
@@ -329,6 +330,9 @@ def main():
             previous_conv.bias.data = previous_conv.bias.data[mask]
 
             next_conv.weight.data = next_conv.weight.data[:, mask]
+
+    # warp back to nn.DataParallel
+    model = nn.DataParallel(model)
 
     # clear gradients
     for p in model.parameters():
@@ -379,7 +383,6 @@ def main():
             'best_acc1': best_acc1,
             'optimizer' : optimizer.state_dict()
             }, is_best, path=args.tmp, filename="checkpoint-retrain0.pth")
-
 
 def train(train_loader, model, optimizer, lr_scheduler, epoch):
     batch_time = AverageMeter()
