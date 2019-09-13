@@ -32,6 +32,7 @@ parser.add_argument('--model', metavar='STR', default=None, help='model')
 parser.add_argument('--data', metavar='DIR', default="/media/ssd0/ilsvrc12/rec", help='path to dataset')
 parser.add_argument('--batch-size', default=256, type=int,
                     metavar='N', help='mini-batch size')
+parser.add_argument('--crop-size', default=224, type=int, help='image crop size')
 parser.add_argument('--epochs', default=100, type=int, metavar='N',
                     help='number of total epochs to run')
 parser.add_argument('--lr', '--learning-rate', default=0.1, type=float,
@@ -167,7 +168,7 @@ def main():
         train_loader, val_loader = dali_ilsvrc_loader(args.data, num_gpus=2, batch_size=args.batch_size, num_threads_per_gpu=2)
         train_batch_per_epoch = int(np.ceil(train_loader._size/args.batch_size))
     else:
-        train_loader, val_loader = ilsvrc2012(args.data, bs=args.batch_size)
+        train_loader, val_loader = ilsvrc2012(args.data, bs=args.batch_size, crop_size=args.crop_size)
         train_batch_per_epoch = len(train_loader)
 
     # records
