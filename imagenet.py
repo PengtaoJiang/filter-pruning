@@ -50,6 +50,7 @@ parser.add_argument('--randseed', type=int, help='random seed', default=None)
 parser.add_argument('--use-dali', action="store_true")
 parser.add_argument('--no-retrain', action="store_true")
 parser.add_argument('--sparsity', type=float, default=1e-5, help='sparsity regularization')
+parser.add_argument('--sparse-thres', type=float, default=1e-2, help='sparse threshold')
 parser.add_argument('--retrain', action="store_true")
 parser.add_argument('--prune-type', type=int, default=0, help="prune method")
 parser.add_argument('--percent', type=float, default=0.5, help='pruning percent')
@@ -87,7 +88,7 @@ logger = Logger(join(args.tmp, "log.txt"))
 # 0: prune with bn factor globally
 # 1: prune with (bn factor x next conv weight) globally
 # 2: prune with bn factor locally.
-#    Filters whose factors are less than the 0.01 times maximal factors within the same layer will be pruned
+#    Filters whose factors are less than the args.sparse_thres times maximal factors within the same layer will be pruned
 def get_factors(model):
 
     factors = {}
@@ -131,7 +132,7 @@ def get_factors(model):
 
     return factors
 
-def get_sparsity(factors, thres=0.01):
+def get_sparsity(factors, thres):
     total0 = 0
     total = 0
     for v in factors.values():
@@ -195,7 +196,7 @@ def main():
 
     scheduler = WarmupStepLR(step_size=30*train_batch_per_epoch, gamma=args.gamma, base_lr=args.lr, warmup_iters=0)
 
-    last_sparsity = get_sparsity(get_factors(model))
+    last_sparsity = get_sparsity(get_factors(model), args.sparse_thres)
     for epoch in range(args.start_epoch, args.epochs):
 
         # train and evaluate
@@ -216,7 +217,7 @@ def main():
 
         logger.info("Best acc1=%.5f" % best_acc1)
 
-        model_sparsity = get_sparsity(get_factors(model))
+        model_sparsity = get_sparsity(get_factors(model), args.sparse_thres)
 
         # for prune-type == 2
         if args.prune_type == 2:
@@ -261,7 +262,7 @@ def main():
     # calculate pruning mask
     model = model.module
     factors = get_factors(model)
-    sparsity = get_sparsity(factors)
+    sparsity = get_sparsity(factors, args.sparse_thres)
     factors_all = torch.cat(list(factors.values()))
     factors_all, _ = torch.sort(factors_all)
     thres = factors_all[int(factors_all.numel() * args.percent)]
@@ -279,7 +280,7 @@ def main():
         if args.prune_type == 0 or args.prune_type == 1:
             prune_mask[name] = (factor >= thres)
         elif args.prune_type == 2:
-            prune_mask[name] = factor >= factor.max() * 0.01
+            prune_mask[name] = factor >= factor.max() * args.sparse_thres
 
         total_filters += factor.numel()
         pruned_filters += (prune_mask[name].bitwise_not()).sum()
