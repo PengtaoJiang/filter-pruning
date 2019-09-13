@@ -40,7 +40,6 @@ class VGG(nn.Module):
 
     def forward(self, x):
         x = self.features(x)
-        print(x.shape)
         x = self.avgpool(x)
         x = torch.flatten(x, 1)
         x = self.classifier(x)
