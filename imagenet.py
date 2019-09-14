@@ -50,7 +50,7 @@ parser.add_argument('--randseed', type=int, help='random seed', default=None)
 #
 parser.add_argument('--use-dali', action="store_true")
 parser.add_argument('--no-retrain', action="store_true")
-parser.add_argument('--sparsity', type=float, default=1e-5, help='sparsity regularization')
+parser.add_argument('--sparsity', type=float, default=0, help='sparsity regularization')
 parser.add_argument('--sparse-thres', type=float, default=1e-2, help='sparse threshold')
 parser.add_argument('--retrain', action="store_true")
 parser.add_argument('--prune-type', type=int, default=0, help="prune method")
@@ -66,7 +66,7 @@ args.tmp = args.tmp+"-seed%d"%args.randseed
 
 # sparsity penalty starts from 1e-5 when prune_type = 2
 if args.prune_type == 2:
-    args.sparsity = 1e-5
+    args.sparsity = 0
 
 # Random seed
 # According to https://pytorch.org/docs/master/notes/randomness.html
@@ -112,7 +112,7 @@ def get_factors(model):
                 if isinstance(next_conv, nn.Linear):
                     # for vgg, the last conv outputs N 512 7 7 tensor
                     # hence, the weight of the next Linear layer is: 4096 25088 (25088 = 512*7*7)
-                    next_weight = next_weight.view(4096, 512, 7, 7)
+                    next_weight = next_weight.view(1000, 512, 1, 1)
 
                 next_weight = next_weight.abs().mean(dim=(0,2,3))
 
@@ -147,7 +147,9 @@ def main():
 
     # model and optimizer
     # model_name = "torchvision.models.vgg11_bn(pretrained=True)"
-    model_name = "torchvision.models.vgg11_bn()"
+    import myvgg
+    # model_name = "torchvision.models.vgg11_bn()"
+    model_name = "myvgg.vgg19_bn()"
     model = eval(model_name)
     model = nn.DataParallel(model.cuda())
 
@@ -229,11 +231,11 @@ def main():
                 # not sparse enough
                 if sparsity_gain < expected_sparsity_gain:
                     logger.info("Sparsity gain %f (expected%f), increasing sparse penalty."%(sparsity_gain, expected_sparsity_gain))
-                    args.sparsity += 1e-5
+                    args.sparsity += 5e-5
             elif model_sparsity > target_sparsity:
                 # over sparse
                 if model_sparsity > last_sparsity and args.sparsity > 0:
-                    args.sparsity -= 1e-5
+                    args.sparsity -= 5e-5
 
             logger.info("Model sparsity=%f (last=%f, target=%f), args.sparsity=%f" %\
                 (model_sparsity, last_sparsity, target_sparsity, args.sparsity))
