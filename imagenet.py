@@ -33,6 +33,7 @@ parser.add_argument('--data', metavar='DIR', default="/media/ssd0/ilsvrc12/rec",
 parser.add_argument('--batch-size', default=256, type=int,
                     metavar='N', help='mini-batch size')
 parser.add_argument('--crop-size', default=224, type=int, help='image crop size')
+parser.add_argument('--resize', default=256, type=int, help='image resize during testing')
 parser.add_argument('--epochs', default=100, type=int, metavar='N',
                     help='number of total epochs to run')
 parser.add_argument('--lr', '--learning-rate', default=0.1, type=float,
@@ -54,9 +55,11 @@ parser.add_argument('--sparsity', type=float, default=0, help='sparsity regulari
 parser.add_argument('--sparse-thres', type=float, default=1e-2, help='sparse threshold')
 parser.add_argument('--retrain', action="store_true")
 parser.add_argument('--prune-type', type=int, default=0, help="prune method")
-parser.add_argument('--percent', type=float, default=0.5, help='pruning percent')
+parser.add_argument('--percent', type=float, default=0.3, help='pruning percent')
 args = parser.parse_args()
 
+
+args.resize = int(float(args.crop_size) / 0.875)
 milestones = [int(i) for i in args.milestones.split(',')]
 
 if args.randseed == None:
@@ -167,10 +170,14 @@ def main():
 
     # dataloaders
     if args.use_dali:
-        train_loader, val_loader = dali_ilsvrc_loader(args.data, num_gpus=2, batch_size=args.batch_size, num_threads_per_gpu=2)
+        train_loader, val_loader = dali_ilsvrc_loader(args.data, batch_size=args.batch_size,
+        crop_size=args.crop_size, resize=args.resize, num_gpus=4, num_threads_per_gpu=2)
+
         train_batch_per_epoch = int(np.ceil(train_loader._size/args.batch_size))
+
     else:
         train_loader, val_loader = ilsvrc2012(args.data, bs=args.batch_size, crop_size=args.crop_size)
+
         train_batch_per_epoch = len(train_loader)
 
     # records
@@ -205,7 +212,9 @@ def main():
         # train and evaluate
         loss = train(train_loader, model, optimizer, scheduler, epoch)
         acc1, acc5 = validate(val_loader, model, epoch)
-        scheduler.step()
+        if args.use_dali:
+            train_loader.reset()
+            val_loader.reset()
 
         # remember best prec@1 and save checkpoint
         is_best = acc1 > best_acc1
@@ -301,7 +310,7 @@ def main():
 
     # reload model
     model = eval(model_name)
-    
+    model = nn.DataParallel(model.cuda())
     model.load_state_dict(torch.load(join(args.tmp, "checkpoint.pth"))["state_dict"])
 
     # do real pruning
@@ -397,7 +406,7 @@ def train(train_loader, model, optimizer, lr_scheduler, epoch):
     top5 = AverageMeter()
 
     if args.use_dali:
-        train_loader_len = int(train_loader._size / 100)
+        train_loader_len = int(np.ceil(train_loader._size/args.batch_size))
     else:
         train_loader_len = len(train_loader)
 
