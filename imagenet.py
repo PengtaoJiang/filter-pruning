@@ -367,10 +367,10 @@ def main():
         momentum=args.momentum,
         weight_decay=args.weight_decay
     )
+    args.epochs = 20
+    best_acc1 = 0
     scheduler_retrain = WarmupLR(max_iters=train_batch_per_epoch*args.epochs, lr=1e-3,
                                  warmup_iters=5*train_batch_per_epoch)
-    best_acc1 = 0
-    args.epochs = 20
     for epoch in range(0, args.epochs):
 
         # train and evaluate
