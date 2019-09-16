@@ -169,6 +169,7 @@ def main():
     logger.info(optimizer)
 
     # dataloaders
+    train_batch_per_epoch = -1
     if args.use_dali:
         train_loader, val_loader = dali_ilsvrc_loader(args.data, batch_size=args.batch_size,
         crop_size=args.crop_size, resize=args.resize, num_gpus=4, num_threads_per_gpu=2)
@@ -193,6 +194,7 @@ def main():
     # optionally resume from a checkpoint
     if args.resume:
         if isfile(args.resume):
+            shutil.copy(args.resume, args.tmp)
             logger.info("=> loading checkpoint '{}'".format(args.resume))
             checkpoint = torch.load(args.resume)
             args.start_epoch = checkpoint['epoch']
@@ -212,9 +214,6 @@ def main():
         # train and evaluate
         loss = train(train_loader, model, optimizer, scheduler, epoch)
         acc1, acc5 = validate(val_loader, model, epoch)
-        if args.use_dali:
-            train_loader.reset()
-            val_loader.reset()
 
         # remember best prec@1 and save checkpoint
         is_best = acc1 > best_acc1
@@ -341,7 +340,8 @@ def main():
             m.running_var = m.running_var[mask]
 
             previous_conv.weight.data = previous_conv.weight.data[mask]
-            previous_conv.bias.data = previous_conv.bias.data[mask]
+            if previous_conv.bias is not None:
+                previous_conv.bias.data = previous_conv.bias.data[mask]
 
             next_conv.weight.data = next_conv.weight.data[:, mask]
 
@@ -367,9 +367,11 @@ def main():
         momentum=args.momentum,
         weight_decay=args.weight_decay
     )
-    scheduler_retrain = WarmupLR(max_iters=len(train_loader)*args.epochs, lr=1e-3, warmup_iters=5*len(train_loader))
+    scheduler_retrain = WarmupLR(max_iters=train_batch_per_epoch*args.epochs, lr=1e-3,
+                                 warmup_iters=5*train_batch_per_epoch)
     best_acc1 = 0
-    for epoch in range(0, 20):
+    args.epochs = 20
+    for epoch in range(0, args.epochs):
 
         # train and evaluate
         loss = train(train_loader, model, optimizer_retrain, scheduler_retrain, epoch)
@@ -409,7 +411,6 @@ def train(train_loader, model, optimizer, lr_scheduler, epoch):
         train_loader_len = int(np.ceil(train_loader._size/args.batch_size))
     else:
         train_loader_len = len(train_loader)
-
 
     # switch to train mode
     model.train()
@@ -470,6 +471,9 @@ def train(train_loader, model, optimizer, lr_scheduler, epoch):
                    batch_time=batch_time, data_time=data_time, loss=losses, top1=top1, top5=top5,
                    lr=lr))
 
+    if args.use_dali:
+        train_loader.reset()
+
     return losses.avg
 
 def validate(val_loader, model, epoch):
@@ -521,6 +525,10 @@ def validate(val_loader, model, epoch):
 
         logger.info(' * Prec@1 {top1.avg:.5f} Prec@5 {top5.avg:.5f}'
               .format(top1=top1, top5=top5))
+
+    if args.use_dali:
+        val_loader.reset()
+
     return top1.avg, top5.avg
 
 if __name__ == '__main__':
